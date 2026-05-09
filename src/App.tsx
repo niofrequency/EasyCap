@@ -57,19 +57,40 @@ const MODELS = [
 export default function App() {
   const [images, setImages] = useState<ImageFile[]>([]);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
-  const [settings, setSettings] = useState<AppSettings>({
-    apiKey: '',
-    triggerWord: 'my_subject',
-    systemPrompt: 'You are a training data annotator. Describe the main subject with natural, direct language. Focus on repeatable features: density/texture of pubic hair, labia state/wetness, hand position, angle, and skin texture. MINIMUM description of background. 15-35 words max. NO watermarks, tattoos, jewelry, skin imperfections, or flowery adjectives.',
-    model: 'grok-4-1-fast',
-    temperature: 0.7,
-    detail: 'high'
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    const saved = localStorage.getItem('bcp_settings');
+    if (saved) return JSON.parse(saved);
+    return {
+      apiKey: '',
+      triggerWord: 'my_subject',
+      systemPrompt: 'You are a training data annotator. Describe the main subject with natural, direct language. Focus on repeatable features: density/texture of pubic hair, labia state/wetness, hand position, angle, and skin texture. MINIMUM description of background. 15-35 words max. NO watermarks, tattoos, jewelry, skin imperfections, or flowery adjectives.',
+      model: 'grok-4-1-fast',
+      temperature: 0.7,
+      detail: 'high'
+    };
   });
   const [availableModels, setAvailableModels] = useState<{id: string, name: string}[]>(MODELS);
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processedCount, setProcessedCount] = useState(0);
   const [version] = useState("V1.4.2-STABLE");
   const processingAbortRef = useRef<boolean>(false);
+
+  // Persistence: Save settings
+  useEffect(() => {
+    localStorage.setItem('bcp_settings', JSON.stringify(settings));
+  }, [settings]);
+
+  // Persistence: Save captions (by filename)
+  useEffect(() => {
+    if (images.length > 0) {
+      const captionMap = images.reduce((acc, img) => {
+        if (img.caption) acc[img.file.name] = img.caption;
+        return acc;
+      }, {} as Record<string, string>);
+      localStorage.setItem('bcp_captions', JSON.stringify(captionMap));
+    }
+  }, [images]);
 
   // Fetch available models when API key changes
   useEffect(() => {
@@ -81,11 +102,10 @@ export default function App() {
       .then(data => {
         if (data.data) {
           const visionModels = data.data
-            .filter((m: any) => m.id.includes('vision'))
+            .filter((m: any) => m.id.includes('vision') || m.id.includes('fast'))
             .map((m: any) => ({ id: m.id, name: m.id }));
           if (visionModels.length > 0) {
             setAvailableModels(visionModels);
-            // If current model is not in the list, switch to the first vision model
             if (!visionModels.some((m: any) => m.id === settings.model)) {
                 setSettings(s => ({ ...s, model: visionModels[0].id }));
             }
@@ -100,12 +120,14 @@ export default function App() {
 
   // File Upload
   const onDrop = useCallback((acceptedFiles: File[]) => {
+    const savedCaptions = JSON.parse(localStorage.getItem('bcp_captions') || '{}');
+    
     const newImages = acceptedFiles.map(file => ({
       id: Math.random().toString(36).substring(7),
       file,
       preview: URL.createObjectURL(file),
-      caption: '',
-      status: 'idle' as const
+      caption: savedCaptions[file.name] || '',
+      status: (savedCaptions[file.name] ? 'done' : 'idle') as any
     }));
     setImages(prev => [...prev, ...newImages]);
     if (!selectedImageId && newImages.length > 0) {
@@ -131,7 +153,7 @@ export default function App() {
   // Captioning Logic
   const processImage = async (imgId: string) => {
     const img = images.find(i => i.id === imgId);
-    if (!img || img.status === 'processing') return;
+    if (!img) return;
 
     setImages(prev => prev.map(p => p.id === imgId ? { ...p, status: 'processing', error: undefined } : p));
 
@@ -174,14 +196,17 @@ export default function App() {
   };
 
   const processAll = async () => {
+    const idleImages = images.filter(img => img.status === 'idle' || img.status === 'error');
+    if (idleImages.length === 0) return;
+
     setIsProcessing(true);
+    setProcessedCount(0);
     processingAbortRef.current = false;
 
-    const idleImages = images.filter(img => img.status === 'idle' || img.status === 'error');
-    
-    for (const img of idleImages) {
+    for (let i = 0; i < idleImages.length; i++) {
       if (processingAbortRef.current) break;
-      await processImage(img.id);
+      await processImage(idleImages[i].id);
+      setProcessedCount(i + 1);
     }
     
     setIsProcessing(false);
@@ -218,7 +243,7 @@ export default function App() {
             <ImageIcon className="w-5 h-5 text-white" />
           </div>
           <h1 className="text-lg font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 uppercase">
-            LoRA Captioner Pro
+            Easy-Cap
           </h1>
         </div>
 
@@ -549,8 +574,9 @@ export default function App() {
             ENGINE: {settings.model.toUpperCase()}
           </div>
           {isProcessing && (
-            <div className="flex items-center gap-2 text-indigo-400 animate-pulse">
-              QUEUE ACTIVE: {images.filter(i => i.status === 'processing').length} IN PROGRESS
+            <div className="flex items-center gap-2 text-indigo-400 font-bold">
+              <span className="animate-pulse">●</span>
+              PROCESSING: {processedCount} / {images.filter(img => img.status === 'idle' || img.status === 'error' || img.status === 'processing').length + processedCount}
             </div>
           )}
         </div>
