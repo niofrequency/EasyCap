@@ -75,6 +75,7 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [processedCount, setProcessedCount] = useState(0);
+  const [isLoaded, setIsLoaded] = useState(false);
   const [version] = useState("V1.4.2-STABLE");
   const processingAbortRef = useRef<boolean>(false);
 
@@ -86,28 +87,33 @@ export default function App() {
   // Load from Persistence on mount
   useEffect(() => {
     const loadData = async () => {
-      const savedCaptions = JSON.parse(localStorage.getItem('bcp_captions') || '{}');
-      const allKeys = await keys();
-      const imageList: ImageFile[] = [];
+      try {
+        const savedCaptions = JSON.parse(localStorage.getItem('bcp_captions') || '{}');
+        const allKeys = await keys();
+        const imageList: ImageFile[] = [];
 
-      for (const key of allKeys) {
-        if (typeof key === 'string' && key.startsWith('img_')) {
-          const fileData = await get(key);
-          if (fileData) {
-            const id = key.replace('img_', '');
-            imageList.push({
-              id,
-              file: fileData as File,
-              preview: URL.createObjectURL(fileData as File),
-              caption: savedCaptions[(fileData as File).name] || '',
-              status: savedCaptions[(fileData as File).name] ? 'done' : 'idle'
-            });
+        for (const key of allKeys) {
+          if (typeof key === 'string' && key.startsWith('img_')) {
+            const fileData = await get(key);
+            if (fileData) {
+              const id = key.replace('img_', '');
+              imageList.push({
+                id,
+                file: fileData as File,
+                preview: URL.createObjectURL(fileData as File),
+                caption: savedCaptions[(fileData as File).name] || '',
+                status: savedCaptions[(fileData as File).name] ? 'done' : 'idle'
+              });
+            }
           }
         }
-      }
-      if (imageList.length > 0) {
-        setImages(imageList);
-        setSelectedImageId(imageList[0].id);
+        if (imageList.length > 0) {
+          setImages(imageList);
+        }
+      } catch (err) {
+        console.error("Failed to load persistent data:", err);
+      } finally {
+        setIsLoaded(true);
       }
     };
     loadData();
@@ -115,14 +121,13 @@ export default function App() {
 
   // Persistence: Save captions (by filename)
   useEffect(() => {
-    if (images.length > 0) {
-      const captionMap = images.reduce((acc, img) => {
-        if (img.caption) acc[img.file.name] = img.caption;
-        return acc;
-      }, {} as Record<string, string>);
-      localStorage.setItem('bcp_captions', JSON.stringify(captionMap));
-    }
-  }, [images]);
+    if (!isLoaded || images.length === 0) return;
+    const captionMap = images.reduce((acc, img) => {
+      if (img.caption) acc[img.file.name] = img.caption;
+      return acc;
+    }, {} as Record<string, string>);
+    localStorage.setItem('bcp_captions', JSON.stringify(captionMap));
+  }, [images, isLoaded]);
 
   // Fetch available models when API key changes
   useEffect(() => {
@@ -187,6 +192,13 @@ export default function App() {
   useEffect(() => {
     return () => images.forEach(img => URL.revokeObjectURL(img.preview));
   }, [images]);
+
+  // Auto-select first image if none selected
+  useEffect(() => {
+    if (images.length > 0 && !selectedImageId) {
+      setSelectedImageId(images[0].id);
+    }
+  }, [images, selectedImageId]);
 
   // Captioning Logic
   const processImage = async (imgId: string) => {
