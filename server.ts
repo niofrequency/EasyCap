@@ -18,7 +18,7 @@ async function startServer() {
 
   // API Route for Models List
   app.get("/api/models", async (req, res) => {
-    const apiKey = process.env.GROK_API_KEY || req.headers['x-api-key'] as string;
+    const apiKey = process.env.GROK_API_KEY || (req.headers['x-api-key'] as string);
     
     if (!apiKey) {
       return res.status(401).json({ error: "Missing API Key" });
