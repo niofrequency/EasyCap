@@ -192,6 +192,12 @@ export default function App() {
     if (selectedImageId === id) setSelectedImageId(null);
   };
 
+  const downloadSingle = (img: ImageFile) => {
+    const filename = img.file.name.replace(/\.[^/.]+$/, "") + ".txt";
+    const blob = new Blob([img.caption || ""], { type: "text/plain;charset=utf-8" });
+    saveAs(blob, filename);
+  };
+
   const downloadAll = async () => {
     const zip = new JSZip();
     images.forEach(img => {
@@ -409,12 +415,21 @@ export default function App() {
                         <button 
                           onClick={(e) => { e.stopPropagation(); processImage(img.id); }}
                           className="p-1.5 bg-white/10 hover:bg-white/20 rounded-md text-white transition-colors"
+                          title="Generate Caption"
                         >
                           <Zap className="w-4 h-4 fill-current" />
                         </button>
                         <button 
+                          onClick={(e) => { e.stopPropagation(); downloadSingle(img); }}
+                          className="p-1.5 bg-white/10 hover:bg-white/20 rounded-md text-emerald-400 transition-colors"
+                          title="Download Caption"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
+                        <button 
                           onClick={(e) => { e.stopPropagation(); removeImage(img.id); }}
                           className="p-1.5 bg-red-500/20 hover:bg-red-500 text-red-200 rounded-md transition-colors"
+                          title="Remove Image"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -464,13 +479,21 @@ export default function App() {
                 <div className="flex-1 flex flex-col overflow-hidden">
                   <div className="flex justify-between items-center mb-2">
                     <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Generated Caption</label>
-                    <button 
-                      onClick={() => processImage(selectedImage.id)}
-                      disabled={selectedImage.status === 'processing'}
-                      className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1 uppercase transition-colors"
-                    >
-                      <Zap className="w-3 h-3 fill-current" /> Regen
-                    </button>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => downloadSingle(selectedImage)}
+                        className="text-[10px] text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1 uppercase transition-colors"
+                      >
+                        <Download className="w-3 h-3" /> Save
+                      </button>
+                      <button 
+                        onClick={() => processImage(selectedImage.id)}
+                        disabled={selectedImage.status === 'processing'}
+                        className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1 uppercase transition-colors"
+                      >
+                        <Zap className="w-3 h-3 fill-current" /> Regen
+                      </button>
+                    </div>
                   </div>
                   <div className="flex-1 relative overflow-hidden">
                     <textarea 
