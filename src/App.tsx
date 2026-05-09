@@ -21,6 +21,7 @@ import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { get, set, del, clear, keys } from 'idb-keyval';
 
 // --- Utilities ---
 function cn(...inputs: ClassValue[]) {
@@ -72,6 +73,7 @@ export default function App() {
   const [availableModels, setAvailableModels] = useState<{id: string, name: string}[]>(MODELS);
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [processedCount, setProcessedCount] = useState(0);
   const [version] = useState("V1.4.2-STABLE");
   const processingAbortRef = useRef<boolean>(false);
@@ -80,6 +82,36 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('bcp_settings', JSON.stringify(settings));
   }, [settings]);
+
+  // Load from Persistence on mount
+  useEffect(() => {
+    const loadData = async () => {
+      const savedCaptions = JSON.parse(localStorage.getItem('bcp_captions') || '{}');
+      const allKeys = await keys();
+      const imageList: ImageFile[] = [];
+
+      for (const key of allKeys) {
+        if (typeof key === 'string' && key.startsWith('img_')) {
+          const fileData = await get(key);
+          if (fileData) {
+            const id = key.replace('img_', '');
+            imageList.push({
+              id,
+              file: fileData as File,
+              preview: URL.createObjectURL(fileData as File),
+              caption: savedCaptions[(fileData as File).name] || '',
+              status: savedCaptions[(fileData as File).name] ? 'done' : 'idle'
+            });
+          }
+        }
+      }
+      if (imageList.length > 0) {
+        setImages(imageList);
+        setSelectedImageId(imageList[0].id);
+      }
+    };
+    loadData();
+  }, []);
 
   // Persistence: Save captions (by filename)
   useEffect(() => {
@@ -119,16 +151,22 @@ export default function App() {
   const selectedImage = images.find(img => img.id === selectedImageId) || null;
 
   // File Upload
-  const onDrop = useCallback((acceptedFiles: File[]) => {
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const savedCaptions = JSON.parse(localStorage.getItem('bcp_captions') || '{}');
     
-    const newImages = acceptedFiles.map(file => ({
-      id: Math.random().toString(36).substring(7),
-      file,
-      preview: URL.createObjectURL(file),
-      caption: savedCaptions[file.name] || '',
-      status: (savedCaptions[file.name] ? 'done' : 'idle') as any
-    }));
+    const newImages: ImageFile[] = [];
+    for (const file of acceptedFiles) {
+      const id = Math.random().toString(36).substring(7);
+      await set(`img_${id}`, file); // Save to IDB
+      newImages.push({
+        id,
+        file,
+        preview: URL.createObjectURL(file),
+        caption: savedCaptions[file.name] || '',
+        status: (savedCaptions[file.name] ? 'done' : 'idle') as any
+      });
+    }
+
     setImages(prev => [...prev, ...newImages]);
     if (!selectedImageId && newImages.length > 0) {
       setSelectedImageId(newImages[0].id);
@@ -200,21 +238,48 @@ export default function App() {
     if (idleImages.length === 0) return;
 
     setIsProcessing(true);
+    setIsPaused(false);
     setProcessedCount(0);
     processingAbortRef.current = false;
 
     for (let i = 0; i < idleImages.length; i++) {
-      if (processingAbortRef.current) break;
+      if (processingAbortRef.current) {
+        setIsPaused(true);
+        break;
+      }
       await processImage(idleImages[i].id);
       setProcessedCount(i + 1);
     }
     
-    setIsProcessing(false);
+    if (!processingAbortRef.current) {
+      setIsProcessing(false);
+    }
   };
 
-  const removeImage = (id: string) => {
+  const pauseProcessing = () => {
+    processingAbortRef.current = true;
+    setIsPaused(true);
+  };
+
+  const stopProcessing = () => {
+    processingAbortRef.current = true;
+    setIsProcessing(false);
+    setIsPaused(false);
+  };
+
+  const removeImage = async (id: string) => {
+    await del(`img_${id}`);
     setImages(prev => prev.filter(img => img.id !== id));
     if (selectedImageId === id) setSelectedImageId(null);
+  };
+
+  const eraseAll = async () => {
+    if (!confirm("Are you sure you want to erase all images and captions?")) return;
+    await clear();
+    localStorage.removeItem('bcp_captions');
+    setImages([]);
+    setSelectedImageId(null);
+    setIsProcessing(false);
   };
 
   const downloadSingle = (img: ImageFile) => {
@@ -243,7 +308,7 @@ export default function App() {
             <ImageIcon className="w-5 h-5 text-white" />
           </div>
           <h1 className="text-lg font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 uppercase">
-            Easy-Cap
+            EASY-CAP
           </h1>
         </div>
 
@@ -266,13 +331,45 @@ export default function App() {
           </div>
 
           <button 
-            onClick={processAll}
-            disabled={isProcessing || !settings.apiKey || images.length === 0}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-slate-600 rounded-md text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-indigo-900/40 transition-all flex items-center gap-2"
+            onClick={eraseAll}
+            disabled={images.length === 0}
+            className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 rounded-md text-[11px] font-bold uppercase tracking-wider transition-all flex items-center gap-2"
           >
-            {isProcessing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5 fill-current" />}
-            {isProcessing ? 'Processing...' : 'Process All'}
+            <Trash2 className="w-3.5 h-3.5" />
+            Erase All
           </button>
+
+          {isProcessing ? (
+            <button 
+              onClick={isPaused ? processAll : pauseProcessing}
+              className={cn(
+                "px-4 py-2 rounded-md text-[11px] font-bold uppercase tracking-wider shadow-lg transition-all flex items-center gap-2",
+                isPaused ? "bg-amber-600 hover:bg-amber-500 text-white" : "bg-white/10 text-white border border-white/10"
+              )}
+            >
+              {isPaused ? <Zap className="w-3.5 h-3.5 fill-current" /> : <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {isPaused ? 'Resume' : 'Pause'}
+            </button>
+          ) : (
+            <button 
+              onClick={processAll}
+              disabled={!settings.apiKey || images.length === 0}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-slate-600 rounded-md text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-indigo-900/40 transition-all flex items-center gap-2"
+            >
+              <Zap className="w-3.5 h-3.5 fill-current" />
+              Process All
+            </button>
+          )}
+
+          {isProcessing && (
+            <button 
+              onClick={stopProcessing}
+              className="p-2 bg-red-600 text-white rounded-md hover:bg-red-500 transition-colors"
+              title="Stop Processing"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
 
           <button 
             onClick={downloadAll}
