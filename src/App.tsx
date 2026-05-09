@@ -535,20 +535,23 @@ export default function App() {
                     <button className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold transition-all uppercase flex items-center gap-1">
                       <Sliders className="w-3 h-3" /> Presets
                     </button>
-                    <div className="absolute right-0 top-full mt-2 w-48 bg-[#121214] border border-white/10 rounded-lg shadow-2xl p-2 z-50 hidden group-hover:block">
-                      <div className="text-[9px] uppercase text-slate-500 font-bold px-2 py-1 border-b border-white/5 mb-1">Apply Tag Preference</div>
-                      {STYLE_PRESETS.map(preset => (
-                        <button
-                          key={preset.name}
-                          onClick={() => {
-                            const newPrompt = `You are an expert LoRA training captioner. ${preset.prompt}\n\nRules:\n- Always focus only on repeatable features... (Standard rules applied)`;
-                            setSettings(s => ({ ...s, systemPrompt: preset.prompt }));
-                          }}
-                          className="w-full text-left px-2 py-1.5 text-[10px] text-slate-400 hover:bg-indigo-600/20 hover:text-indigo-400 rounded transition-colors"
-                        >
-                          {preset.name}
-                        </button>
-                      ))}
+                    <div className="absolute right-0 top-full pt-2 w-48 z-50 hidden group-hover:block">
+                      <div className="bg-[#121214] border border-white/10 rounded-lg shadow-2xl p-2">
+                        <div className="text-[9px] uppercase text-slate-500 font-bold px-2 py-1 border-b border-white/5 mb-1">Apply Tag Preference</div>
+                        {STYLE_PRESETS.map(preset => (
+                          <button
+                            key={preset.name}
+                            onClick={() => {
+                              const rules = `Rules:\n- Focus only on repeatable, useful features\n- Be direct and factual\n- NEVER mention watermarks, logos, tattoos, jewelry, background objects, skin blemishes, or unique identifiers\n- No flowery language`;
+                              const newPrompt = `You are an expert LoRA training captioner. ${preset.prompt}\n\n${rules}`;
+                              setSettings(s => ({ ...s, systemPrompt: newPrompt }));
+                            }}
+                            className="w-full text-left px-2 py-1.5 text-[10px] text-slate-400 hover:bg-indigo-600/20 hover:text-indigo-400 rounded transition-colors cursor-pointer"
+                          >
+                            {preset.name}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
