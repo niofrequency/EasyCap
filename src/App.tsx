@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { useDropzone } from 'react-dropzone'; 
+import { useDropzone } from 'react-dropzone';
 import { 
   Upload, 
   Settings, 
@@ -21,7 +21,7 @@ import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { get, set, del, clear, keys } from 'idb-keyval';
+import * as idbKeyval from 'idb-keyval';
 
 // --- Utilities ---
 function cn(...inputs: ClassValue[]) {
@@ -47,6 +47,13 @@ interface AppSettings {
   detail: 'low' | 'high' | 'auto';
 }
 
+const STYLE_PRESETS = [
+  { name: 'Pure Hairy', prompt: 'Focus strictly on dense pubic hair, detailed strands, and natural curl. No shaving.' },
+  { name: 'Realistic Skin', prompt: 'Highlight skin texture, pores, realism, and soft lighting. Avoid smoothed plastic looks.' },
+  { name: 'Wet/Glistening', prompt: 'Emphasize wetness, labia glistening, and moisture details.' },
+  { name: 'Anatomic Focus', prompt: 'Anatomically correct labels for labia minora/majora, coloration, and precise spread angles.' }
+];
+
 const MODELS = [
   { id: 'grok-4-1-fast', name: 'Grok 4.1 Fast' },
   { id: 'grok-2-vision-1212', name: 'Grok 2 Vision (1212)' },
@@ -64,7 +71,7 @@ export default function App() {
     return {
       apiKey: '',
       triggerWord: 'my_subject',
-      systemPrompt: 'You are a training data annotator. Describe the main subject with natural, direct language. Focus on repeatable features: density/texture of pubic hair, labia state/wetness, hand position, angle, and skin texture. MINIMUM description of background. 15-35 words max. NO watermarks, tattoos, jewelry, skin imperfections, or flowery adjectives.',
+      systemPrompt: `You are an expert LoRA training captioner.\nWrite short, natural, consistent captions (15-35 words).\n\nRules:\n- Always focus only on repeatable features\n- Describe: pubic hair (density, thickness, curl, color), hands if spreading, labia (wetness, color), angle, skin texture\n- Prefer "wet" or "glistening" over "dry"\n- NEVER mention: watermarks, tattoos, jewelry (rings, necklaces), background details, skin blemishes, freckles, specific poses like "buttocks spread wide"\n- Keep language direct and simple. No flowery words.\n\nGood example:\nhairy pussy, hands spreading labia wide open, extremely dense thick curly dark pubic hair, detailed individual strands, wet glistening pink inner folds, close-up overhead view, realistic skin texture, soft even lighting`,
       model: 'grok-4-1-fast',
       temperature: 0.7,
       detail: 'high'
@@ -89,24 +96,42 @@ export default function App() {
     const loadData = async () => {
       try {
         const savedCaptions = JSON.parse(localStorage.getItem('bcp_captions') || '{}');
-        const allKeys = await keys();
+        const savedIds = JSON.parse(localStorage.getItem('bcp_image_ids') || '[]');
         const imageList: ImageFile[] = [];
 
+        for (const id of savedIds) {
+          const fileData = await idbKeyval.get(`img_${id}`);
+          if (fileData) {
+            imageList.push({
+              id,
+              file: fileData as File,
+              preview: URL.createObjectURL(fileData as File),
+              caption: savedCaptions[(fileData as File).name] || '',
+              status: savedCaptions[(fileData as File).name] ? 'done' : 'idle'
+            });
+          }
+        }
+        
+        // Fallback: Check if there are keys in IDB not in localStorage list (unlikely but safe)
+        const allKeys = await idbKeyval.keys();
         for (const key of allKeys) {
           if (typeof key === 'string' && key.startsWith('img_')) {
-            const fileData = await get(key);
-            if (fileData) {
-              const id = key.replace('img_', '');
-              imageList.push({
-                id,
-                file: fileData as File,
-                preview: URL.createObjectURL(fileData as File),
-                caption: savedCaptions[(fileData as File).name] || '',
-                status: savedCaptions[(fileData as File).name] ? 'done' : 'idle'
-              });
+            const id = key.replace('img_', '');
+            if (!savedIds.includes(id)) {
+              const fileData = await idbKeyval.get(key);
+              if (fileData) {
+                imageList.push({
+                  id,
+                  file: fileData as File,
+                  preview: URL.createObjectURL(fileData as File),
+                  caption: savedCaptions[(fileData as File).name] || '',
+                  status: savedCaptions[(fileData as File).name] ? 'done' : 'idle'
+                });
+              }
             }
           }
         }
+
         if (imageList.length > 0) {
           setImages(imageList);
         }
@@ -119,14 +144,18 @@ export default function App() {
     loadData();
   }, []);
 
-  // Persistence: Save captions (by filename)
+  // Persistence: Save captions and IDS
   useEffect(() => {
-    if (!isLoaded || images.length === 0) return;
+    if (!isLoaded) return;
+    
     const captionMap = images.reduce((acc, img) => {
       if (img.caption) acc[img.file.name] = img.caption;
       return acc;
     }, {} as Record<string, string>);
     localStorage.setItem('bcp_captions', JSON.stringify(captionMap));
+    
+    const imageIds = images.map(img => img.id);
+    localStorage.setItem('bcp_image_ids', JSON.stringify(imageIds));
   }, [images, isLoaded]);
 
   // Fetch available models when API key changes
@@ -162,7 +191,7 @@ export default function App() {
     const newImages: ImageFile[] = [];
     for (const file of acceptedFiles) {
       const id = Math.random().toString(36).substring(7);
-      await set(`img_${id}`, file); // Save to IDB
+      await idbKeyval.set(`img_${id}`, file); // Save to IDB
       newImages.push({
         id,
         file,
@@ -173,10 +202,7 @@ export default function App() {
     }
 
     setImages(prev => [...prev, ...newImages]);
-    if (!selectedImageId && newImages.length > 0) {
-      setSelectedImageId(newImages[0].id);
-    }
-  }, [selectedImageId]);
+  }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -238,7 +264,14 @@ export default function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Failed to caption');
 
-      const fullCaption = `${settings.triggerWord}, ${data.caption.trim()}`;
+      let captionText = data.caption.trim();
+
+      // Remove duplicate trigger if Grok includes it
+      if (captionText.toLowerCase().startsWith(settings.triggerWord.toLowerCase())) {
+        captionText = captionText.replace(new RegExp(`^${settings.triggerWord}\\s*,?\\s*`, 'i'), '').trim();
+      }
+
+      const fullCaption = `${settings.triggerWord}, ${captionText}`;
       setImages(prev => prev.map(p => p.id === imgId ? { ...p, status: 'done', caption: fullCaption } : p));
     } catch (error: any) {
       setImages(prev => prev.map(p => p.id === imgId ? { ...p, status: 'error', error: error.message } : p));
@@ -280,15 +313,16 @@ export default function App() {
   };
 
   const removeImage = async (id: string) => {
-    await del(`img_${id}`);
+    await idbKeyval.del(`img_${id}`);
     setImages(prev => prev.filter(img => img.id !== id));
     if (selectedImageId === id) setSelectedImageId(null);
   };
 
   const eraseAll = async () => {
     if (!confirm("Are you sure you want to erase all images and captions?")) return;
-    await clear();
+    await idbKeyval.clear();
     localStorage.removeItem('bcp_captions');
+    localStorage.removeItem('bcp_image_ids');
     setImages([]);
     setSelectedImageId(null);
     setIsProcessing(false);
@@ -423,7 +457,29 @@ export default function App() {
               </div>
 
               <div className="mb-6 flex-1 flex flex-col">
-                <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2 block">System Prompt</label>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold block">System Prompt</label>
+                  <div className="group relative">
+                    <button className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold transition-all uppercase flex items-center gap-1">
+                      <Sliders className="w-3 h-3" /> Presets
+                    </button>
+                    <div className="absolute right-0 top-full mt-2 w-48 bg-[#121214] border border-white/10 rounded-lg shadow-2xl p-2 z-50 hidden group-hover:block">
+                      <div className="text-[9px] uppercase text-slate-500 font-bold px-2 py-1 border-b border-white/5 mb-1">Apply Tag Preference</div>
+                      {STYLE_PRESETS.map(preset => (
+                        <button
+                          key={preset.name}
+                          onClick={() => {
+                            const newPrompt = `You are an expert LoRA training captioner. ${preset.prompt}\n\nRules:\n- Always focus only on repeatable features... (Standard rules applied)`;
+                            setSettings(s => ({ ...s, systemPrompt: preset.prompt }));
+                          }}
+                          className="w-full text-left px-2 py-1.5 text-[10px] text-slate-400 hover:bg-indigo-600/20 hover:text-indigo-400 rounded transition-colors"
+                        >
+                          {preset.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
                 <textarea 
                   className="w-full flex-1 bg-black/40 border border-white/10 rounded p-2 text-xs text-slate-400 resize-none leading-relaxed focus:border-indigo-500 outline-none custom-scrollbar"
                   value={settings.systemPrompt}
