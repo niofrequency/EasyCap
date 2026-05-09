@@ -47,6 +47,33 @@ interface AppSettings {
   detail: 'low' | 'high' | 'auto';
 }
 
+const CAPTION_MODES = [
+  { 
+    id: 'bodypart', 
+    name: 'Body Part', 
+    defaultTrigger: 'hairy pussy',
+    description: 'Optimized for specific anatomy / textures' 
+  },
+  { 
+    id: 'character', 
+    name: 'Character', 
+    defaultTrigger: 'my_character',
+    description: 'People, outfits, poses, expressions' 
+  },
+  { 
+    id: 'general', 
+    name: 'General Scene', 
+    defaultTrigger: 'my_scene',
+    description: 'Full images, environments, composition' 
+  },
+  { 
+    id: 'object', 
+    name: 'Specific Object', 
+    defaultTrigger: 'my_object',
+    description: 'Items, clothing, accessories, etc.' 
+  }
+];
+
 const STYLE_PRESETS = [
   { name: 'Pure Hairy', prompt: 'Focus strictly on dense pubic hair, detailed strands, and natural curl. No shaving.' },
   { name: 'Realistic Skin', prompt: 'Highlight skin texture, pores, realism, and soft lighting. Avoid smoothed plastic looks.' },
@@ -78,6 +105,7 @@ export default function App() {
     };
   });
   const [availableModels, setAvailableModels] = useState<{id: string, name: string}[]>(MODELS);
+  const [currentMode, setCurrentMode] = useState('bodypart');
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -454,6 +482,35 @@ export default function App() {
                   onChange={e => setSettings(s => ({ ...s, triggerWord: e.target.value }))}
                   className="w-full bg-black/40 border border-white/10 rounded p-2 text-sm text-indigo-400 outline-none focus:border-indigo-500 font-mono"
                 />
+              </div>
+
+              <div className="mb-6">
+                <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2 block">Caption Mode</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {CAPTION_MODES.map(mode => (
+                    <button
+                      key={mode.id}
+                      onClick={() => {
+                        setCurrentMode(mode.id);
+                        setSettings(s => ({ 
+                          ...s, 
+                          triggerWord: mode.defaultTrigger 
+                        }));
+                      }}
+                      className={cn(
+                        "py-2 px-1 rounded text-[10px] font-bold uppercase transition-all border",
+                        currentMode === mode.id 
+                          ? "bg-indigo-600 border-indigo-500 text-white" 
+                          : "bg-black/40 border-white/10 hover:border-white/30 text-slate-500"
+                      )}
+                    >
+                      {mode.name}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[9px] text-slate-500 mt-2 italic leading-tight">
+                  {CAPTION_MODES.find(m => m.id === currentMode)?.description}
+                </p>
               </div>
 
               <div className="mb-6 flex-1 flex flex-col">
