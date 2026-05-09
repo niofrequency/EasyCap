@@ -1,0 +1,548 @@
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { useDropzone } from 'react-dropzone';
+import { 
+  Upload, 
+  Settings, 
+  Save, 
+  Download, 
+  Trash2, 
+  ChevronRight, 
+  Loader2, 
+  CheckCircle2, 
+  AlertCircle,
+  Eye,
+  Type,
+  Sliders,
+  Image as ImageIcon,
+  Zap
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
+import { clsx, type ClassValue } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+
+// --- Utilities ---
+function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
+
+// --- Types ---
+interface ImageFile {
+  id: string;
+  file: File;
+  preview: string;
+  caption: string;
+  status: 'idle' | 'processing' | 'done' | 'error';
+  error?: string;
+}
+
+interface AppSettings {
+  apiKey: string;
+  triggerWord: string;
+  systemPrompt: string;
+  model: string;
+  temperature: number;
+  detail: 'low' | 'high' | 'auto';
+}
+
+const MODELS = [
+  { id: 'grok-4-1-fast', name: 'Grok 4.1 Fast' },
+  { id: 'grok-2-vision-1212', name: 'Grok 2 Vision (1212)' },
+  { id: 'grok-vision-beta', name: 'Grok Vision Beta' }
+];
+
+// --- Sub-components ---
+
+export default function App() {
+  const [images, setImages] = useState<ImageFile[]>([]);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+  const [settings, setSettings] = useState<AppSettings>({
+    apiKey: '',
+    triggerWord: 'my_subject',
+    systemPrompt: 'You are a training data annotator. Describe the main subject with natural, direct language. Focus on repeatable features: density/texture of pubic hair, labia state/wetness, hand position, angle, and skin texture. MINIMUM description of background. 15-35 words max. NO watermarks, tattoos, jewelry, skin imperfections, or flowery adjectives.',
+    model: 'grok-4-1-fast',
+    temperature: 0.7,
+    detail: 'high'
+  });
+  const [availableModels, setAvailableModels] = useState<{id: string, name: string}[]>(MODELS);
+  const [isSidebarOpen, setSidebarOpen] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [version] = useState("V1.4.2-STABLE");
+  const processingAbortRef = useRef<boolean>(false);
+
+  // Fetch available models when API key changes
+  useEffect(() => {
+    if (settings.apiKey) {
+      fetch('/api/models', {
+        headers: { 'x-api-key': settings.apiKey }
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.data) {
+          const visionModels = data.data
+            .filter((m: any) => m.id.includes('vision'))
+            .map((m: any) => ({ id: m.id, name: m.id }));
+          if (visionModels.length > 0) {
+            setAvailableModels(visionModels);
+            // If current model is not in the list, switch to the first vision model
+            if (!visionModels.some((m: any) => m.id === settings.model)) {
+                setSettings(s => ({ ...s, model: visionModels[0].id }));
+            }
+          }
+        }
+      })
+      .catch(err => console.error("Failed to fetch models:", err));
+    }
+  }, [settings.apiKey]);
+
+  const selectedImage = images.find(img => img.id === selectedImageId) || null;
+
+  // File Upload
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    const newImages = acceptedFiles.map(file => ({
+      id: Math.random().toString(36).substring(7),
+      file,
+      preview: URL.createObjectURL(file),
+      caption: '',
+      status: 'idle' as const
+    }));
+    setImages(prev => [...prev, ...newImages]);
+    if (!selectedImageId && newImages.length > 0) {
+      setSelectedImageId(newImages[0].id);
+    }
+  }, [selectedImageId]);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/png': ['.png'],
+      'image/webp': ['.webp']
+    },
+    multiple: true
+  } as any);
+
+  // Cleanup previews
+  useEffect(() => {
+    return () => images.forEach(img => URL.revokeObjectURL(img.preview));
+  }, [images]);
+
+  // Captioning Logic
+  const processImage = async (imgId: string) => {
+    const img = images.find(i => i.id === imgId);
+    if (!img || img.status === 'processing') return;
+
+    setImages(prev => prev.map(p => p.id === imgId ? { ...p, status: 'processing', error: undefined } : p));
+
+    try {
+      const reader = new FileReader();
+      const base64Promise = new Promise<{base64: string, type: string}>((resolve) => {
+        reader.onload = () => {
+          const base64 = (reader.result as string).split(',')[1];
+          resolve({ base64, type: img.file.type });
+        };
+        reader.readAsDataURL(img.file);
+      });
+      const { base64: base64Image, type: mimeType } = await base64Promise;
+
+      const response = await fetch('/api/caption', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-api-key': settings.apiKey 
+        },
+        body: JSON.stringify({
+          image: base64Image,
+          mimeType: mimeType,
+          systemPrompt: settings.systemPrompt,
+          model: settings.model,
+          temperature: settings.temperature,
+          detail: settings.detail,
+          triggerWord: settings.triggerWord 
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to caption');
+
+      const fullCaption = `${settings.triggerWord}, ${data.caption.trim()}`;
+      setImages(prev => prev.map(p => p.id === imgId ? { ...p, status: 'done', caption: fullCaption } : p));
+    } catch (error: any) {
+      setImages(prev => prev.map(p => p.id === imgId ? { ...p, status: 'error', error: error.message } : p));
+    }
+  };
+
+  const processAll = async () => {
+    setIsProcessing(true);
+    processingAbortRef.current = false;
+
+    const idleImages = images.filter(img => img.status === 'idle' || img.status === 'error');
+    
+    for (const img of idleImages) {
+      if (processingAbortRef.current) break;
+      await processImage(img.id);
+    }
+    
+    setIsProcessing(false);
+  };
+
+  const removeImage = (id: string) => {
+    setImages(prev => prev.filter(img => img.id !== id));
+    if (selectedImageId === id) setSelectedImageId(null);
+  };
+
+  const downloadAll = async () => {
+    const zip = new JSZip();
+    images.forEach(img => {
+      const filename = img.file.name.replace(/\.[^/.]+$/, "") + ".txt";
+      zip.file(filename, img.caption || "");
+    });
+    const content = await zip.generateAsync({ type: "blob" });
+    saveAs(content, "captions.zip");
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-[#050506] text-slate-200 font-sans overflow-hidden">
+      
+      {/* Header */}
+      <header className="h-16 flex items-center justify-between px-6 bg-[#0a0a0c] border-b border-white/5 shadow-2xl relative z-10 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-indigo-600 rounded flex items-center justify-center shadow-[0_0_15px_rgba(79,70,229,0.5)]">
+            <ImageIcon className="w-5 h-5 text-white" />
+          </div>
+          <h1 className="text-lg font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 uppercase">
+            LoRA Captioner Pro
+          </h1>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={() => setSidebarOpen(!isSidebarOpen)}
+            className={cn(
+              "p-2 rounded-md border border-white/10 transition-all",
+              isSidebarOpen ? "bg-indigo-600 text-white border-indigo-500" : "bg-white/5 text-slate-400 hover:bg-white/10"
+            )}
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+          
+          <div {...getRootProps()}>
+            <input {...getInputProps()} />
+            <button className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-md border border-white/10 text-[11px] font-bold uppercase tracking-wider transition-all">
+              Add Images
+            </button>
+          </div>
+
+          <button 
+            onClick={processAll}
+            disabled={isProcessing || !settings.apiKey || images.length === 0}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-slate-600 rounded-md text-[11px] font-bold uppercase tracking-wider shadow-lg shadow-indigo-900/40 transition-all flex items-center gap-2"
+          >
+            {isProcessing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5 fill-current" />}
+            {isProcessing ? 'Processing...' : 'Process All'}
+          </button>
+
+          <button 
+            onClick={downloadAll}
+            disabled={images.length === 0}
+            className="px-4 py-2 bg-white text-black hover:bg-slate-200 disabled:bg-white/5 disabled:text-slate-600 rounded-md text-[11px] font-bold uppercase tracking-wider transition-all flex items-center gap-2"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Save All
+          </button>
+        </div>
+      </header>
+
+      {/* Main Layout */}
+      <main className="flex-1 flex overflow-hidden">
+        
+        {/* Sidebar: Configuration */}
+        <AnimatePresence initial={false}>
+          {isSidebarOpen && (
+            <motion.aside 
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 288, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              className="bg-[#0a0a0c] border-r border-white/5 flex flex-col p-5 overflow-hidden shrink-0"
+            >
+              <div className="mb-6">
+                <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2 block">Vision Engine</label>
+                <select 
+                  className="w-full bg-black/40 border border-white/10 rounded p-2 text-sm text-slate-300 outline-none focus:border-indigo-500 cursor-pointer appearance-none"
+                  value={settings.model}
+                  onChange={e => setSettings(s => ({ ...s, model: e.target.value }))}
+                >
+                  {availableModels.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </div>
+
+              <div className="mb-6">
+                <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2 block">Trigger Word</label>
+                <input 
+                  type="text" 
+                  value={settings.triggerWord}
+                  onChange={e => setSettings(s => ({ ...s, triggerWord: e.target.value }))}
+                  className="w-full bg-black/40 border border-white/10 rounded p-2 text-sm text-indigo-400 outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+
+              <div className="mb-6 flex-1 flex flex-col">
+                <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2 block">System Prompt</label>
+                <textarea 
+                  className="w-full flex-1 bg-black/40 border border-white/10 rounded p-2 text-xs text-slate-400 resize-none leading-relaxed focus:border-indigo-500 outline-none custom-scrollbar"
+                  value={settings.systemPrompt}
+                  onChange={e => setSettings(s => ({ ...s, systemPrompt: e.target.value }))}
+                />
+              </div>
+
+              <div className="space-y-4 mb-4">
+                <div className="space-y-2">
+                  <div className="flex justify-between text-[10px] uppercase">
+                    <span className="text-slate-500 font-bold tracking-widest">Temperature</span>
+                    <span className="text-indigo-400 font-mono">{settings.temperature}</span>
+                  </div>
+                  <input 
+                    type="range" min="0" max="1" step="0.1"
+                    className="w-full accent-indigo-500 h-1 bg-white/5 rounded-full appearance-none cursor-pointer"
+                    value={settings.temperature}
+                    onChange={e => setSettings(s => ({ ...s, temperature: parseFloat(e.target.value) }))}
+                  />
+                </div>
+                <div>
+                   <div className="flex justify-between text-[10px] uppercase mb-2">
+                    <span className="text-slate-500 font-bold tracking-widest">Detail Level</span>
+                    <span className="text-indigo-400 uppercase">{settings.detail}</span>
+                  </div>
+                  <div className="flex gap-1">
+                    {['low', 'high', 'auto'].map(d => (
+                      <button
+                        key={d}
+                        onClick={() => setSettings(s => ({ ...s, detail: d as any }))}
+                        className={cn(
+                          "flex-1 py-1 rounded text-[10px] font-bold uppercase border transition-all",
+                          settings.detail === d 
+                            ? "bg-indigo-600/10 border-indigo-500/50 text-indigo-400" 
+                            : "bg-black/40 border-white/5 text-slate-600 hover:border-white/10"
+                        )}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              
+              <div className="pt-4 border-t border-white/5 space-y-3">
+                <div className="flex flex-col gap-2">
+                  <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">API Key</label>
+                  <input 
+                    type="password"
+                    placeholder="Enter Grok Key..."
+                    className="w-full bg-black/40 border border-white/10 rounded p-2 text-xs text-slate-300 outline-none focus:border-indigo-500"
+                    value={settings.apiKey}
+                    onChange={e => setSettings(s => ({ ...s, apiKey: e.target.value }))}
+                  />
+                </div>
+                <div className="flex items-center justify-between p-2 rounded bg-indigo-500/5 border border-indigo-500/10">
+                  <span className="text-[10px] text-indigo-300 font-bold uppercase tracking-wider">Engine Status</span>
+                  <span className={cn(
+                    "flex h-2 w-2 rounded-full shadow-[0_0_8px_currentColor]",
+                    settings.apiKey ? "bg-emerald-500 text-emerald-500" : "bg-red-500 text-red-500"
+                  )}></span>
+                </div>
+              </div>
+            </motion.aside>
+          )}
+        </AnimatePresence>
+
+        {/* Central Content: Batch Grid */}
+        <section className="flex-1 bg-black p-4 overflow-y-auto scrollbar-hide">
+          {images.length === 0 ? (
+             <div 
+                {...getRootProps()} 
+                className={cn(
+                  "h-full rounded-xl border border-dashed border-white/10 flex flex-col items-center justify-center gap-4 transition-all cursor-pointer group",
+                  isDragActive ? "bg-indigo-500/5 border-indigo-500/50" : "hover:bg-white/5 hover:border-white/20"
+                )}
+              >
+                <input {...getInputProps()} />
+                <div className="w-16 h-16 rounded-2xl bg-[#0a0a0c] border border-white/5 flex items-center justify-center group-hover:scale-110 transition-transform shadow-2xl">
+                  <Upload className={cn("w-6 h-6", isDragActive ? "text-indigo-400 animate-pulse" : "text-slate-600")} />
+                </div>
+                <div className="text-center">
+                  <h3 className="text-sm font-bold uppercase tracking-widest text-slate-400">Import your dataset</h3>
+                  <p className="text-[11px] text-slate-600 uppercase tracking-wider mt-1">Drag and drop or browse files</p>
+                </div>
+             </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-3">
+              <AnimatePresence>
+                {images.map((img) => (
+                  <motion.div 
+                    layout
+                    key={img.id}
+                    onClick={() => setSelectedImageId(img.id)}
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    className={cn(
+                      "relative bg-[#0e0e11] rounded-lg border p-1 group cursor-pointer transition-all",
+                      selectedImageId === img.id ? "border-indigo-500/50 shadow-[0_0_20px_rgba(79,70,229,0.1)]" : "border-white/5 hover:border-white/20"
+                    )}
+                  >
+                    <div className="aspect-square rounded overflow-hidden mb-2 relative bg-black">
+                      <img src={img.preview} alt="preview" className="w-full h-full object-cover" />
+                      
+                      {/* Badge */}
+                      <div className="absolute top-1 right-1 flex gap-1">
+                        {img.status === 'processing' && (
+                          <div className="bg-indigo-600 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase flex items-center gap-1">
+                            <Loader2 className="w-2 h-2 animate-spin" /> ...
+                          </div>
+                        )}
+                        {img.status === 'done' && (
+                          <div className="bg-emerald-600 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase">READY</div>
+                        )}
+                        {img.status === 'error' && (
+                          <div className="bg-red-600 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase">FAIL</div>
+                        )}
+                      </div>
+
+                      {/* Hover Actions */}
+                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); processImage(img.id); }}
+                          className="p-1.5 bg-white/10 hover:bg-white/20 rounded-md text-white transition-colors"
+                        >
+                          <Zap className="w-4 h-4 fill-current" />
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); removeImage(img.id); }}
+                          className="p-1.5 bg-red-500/20 hover:bg-red-500 text-red-200 rounded-md transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="px-1 pb-1">
+                      <div className="text-[9px] text-slate-500 font-mono truncate mb-0.5">{img.file.name}</div>
+                      <div className="text-[10px] text-slate-400 line-clamp-2 leading-tight min-h-[2.5em]">
+                        {img.caption || (img.status === 'error' ? img.error : 'Awaiting generation...')}
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+              
+              {/* Quick Add Card */}
+              <div 
+                {...getRootProps()}
+                className="bg-[#0e0e11]/50 border border-dashed border-white/5 rounded-lg flex flex-col items-center justify-center py-8 group hover:border-indigo-500/30 hover:bg-indigo-500/5 cursor-pointer transition-all"
+              >
+                <input {...getInputProps()} />
+                <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-600 group-hover:text-indigo-400 transition-colors">
+                  <Upload className="w-4 h-4" />
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Right Panel: Editor/Inspector */}
+        <aside className="w-80 bg-[#0a0a0c] border-l border-white/5 flex flex-col shrink-0">
+          <div className="p-5 flex-1 flex flex-col overflow-hidden">
+            <div className="text-[10px] uppercase tracking-widest text-indigo-400 font-bold mb-4 flex items-center gap-2">
+              <span className="w-1 h-3 bg-indigo-500"></span> Image Inspector
+            </div>
+            
+            {selectedImage ? (
+              <div className="flex-1 flex flex-col">
+                <div className="w-full aspect-[4/5] rounded-xl bg-black mb-6 overflow-hidden border border-white/10 shadow-2xl relative group">
+                  <img src={selectedImage.preview} className="w-full h-full object-contain" alt="selected preview" />
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-md p-2 text-[9px] font-mono text-slate-400 text-center uppercase tracking-widest">
+                    {selectedImage.file.name.slice(0, 30)}
+                  </div>
+                </div>
+
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Generated Caption</label>
+                    <button 
+                      onClick={() => processImage(selectedImage.id)}
+                      disabled={selectedImage.status === 'processing'}
+                      className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1 uppercase transition-colors"
+                    >
+                      <Zap className="w-3 h-3 fill-current" /> Regen
+                    </button>
+                  </div>
+                  <div className="flex-1 relative overflow-hidden">
+                    <textarea 
+                      className="w-full h-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-slate-200 leading-relaxed font-mono resize-none focus:ring-1 focus:ring-indigo-500 outline-none custom-scrollbar"
+                      value={selectedImage.caption}
+                      onChange={(e) => setImages(prev => prev.map(p => p.id === selectedImage.id ? { ...p, caption: e.target.value } : p))}
+                      placeholder="Caption will appear here..."
+                    />
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    <button 
+                      onClick={() => setSelectedImageId(prev => {
+                        const idx = images.findIndex(i => i.id === prev);
+                        if (idx > 0) return images[idx-1].id;
+                        return prev;
+                      })}
+                      className="py-2 bg-white/5 border border-white/10 rounded font-bold text-[10px] uppercase tracking-widest hover:bg-white/10 transition-colors"
+                    >
+                      Prev
+                    </button>
+                    <button 
+                      onClick={() => setSelectedImageId(prev => {
+                        const idx = images.findIndex(i => i.id === prev);
+                        if (idx < images.length - 1) return images[idx+1].id;
+                        return prev;
+                      })}
+                      className="py-2 bg-indigo-600 rounded font-bold text-[10px] uppercase tracking-widest shadow-lg shadow-indigo-900/40 hover:bg-indigo-500 transition-colors"
+                    >
+                      Next Image
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center text-slate-600 uppercase tracking-widest text-[10px] gap-2">
+                <AlertCircle className="w-6 h-6 opacity-20" />
+                Select an image to inspect
+              </div>
+            )}
+          </div>
+        </aside>
+      </main>
+
+      {/* Footer Status Bar */}
+      <footer className="h-8 bg-[#0a0a0c] border-t border-white/5 px-6 flex items-center justify-between text-[10px] text-slate-500 font-medium tracking-wide shrink-0">
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2">
+            <span className="text-indigo-500">●</span> 
+            {images.length} IMAGES LOADED
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-emerald-500 uppercase">●</span> 
+            ENGINE: {settings.model.toUpperCase()}
+          </div>
+          {isProcessing && (
+            <div className="flex items-center gap-2 text-indigo-400 animate-pulse">
+              QUEUE ACTIVE: {images.filter(i => i.status === 'processing').length} IN PROGRESS
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="px-2 py-0.5 rounded bg-white/5 border border-white/5 uppercase">
+            STATUS: {settings.apiKey ? 'READY' : 'KEY MISSING'}
+          </div>
+          <div className="uppercase opacity-50">{version}</div>
+        </div>
+      </footer>
+    </div>
+  );
+}

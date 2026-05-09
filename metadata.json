@@ -1,0 +1,6 @@
+{
+  "name": "Easy Caption",
+  "description": "Professional batch image captioning tool for LoRA training, powered by Grok Vision.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
