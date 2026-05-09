@@ -260,12 +260,7 @@ export default function App() {
         {/* Sidebar: Configuration */}
         <AnimatePresence initial={false}>
           {isSidebarOpen && (
-            <motion.aside 
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 288, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              className="bg-[#0a0a0c] border-r border-white/5 flex flex-col p-5 overflow-hidden shrink-0"
-            >
+            <form onSubmit={(e) => e.preventDefault()} className="bg-[#0a0a0c] border-r border-white/5 flex flex-col p-5 overflow-hidden shrink-0">
               <div className="mb-6">
                 <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2 block">Vision Engine</label>
                 <select 
@@ -352,7 +347,7 @@ export default function App() {
                   )}></span>
                 </div>
               </div>
-            </motion.aside>
+            </form>
           )}
         </AnimatePresence>
 
