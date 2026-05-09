@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { useDropzone } from 'react-dropzone';
+import { useDropzone } from 'react-dropzone'; 
 import { 
   Upload, 
   Settings, 
