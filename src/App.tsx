@@ -98,7 +98,7 @@ export default function App() {
     return {
       apiKey: '',
       triggerWord: 'my_subject',
-      systemPrompt: `You are an expert LoRA training captioner.\nWrite short, natural, consistent captions (15-35 words).\n\nRules:\n- Always focus only on repeatable features\n- Describe: pubic hair (density, thickness, curl, color), hands if spreading, labia (wetness, color), angle, skin texture\n- Prefer "wet" or "glistening" over "dry"\n- NEVER mention: watermarks, tattoos, jewelry (rings, necklaces), background details, skin blemishes, freckles, specific poses like "buttocks spread wide"\n- Keep language direct and simple. No flowery words.\n\nGood example:\nhairy pussy, hands spreading labia wide open, extremely dense thick curly dark pubic hair, detailed individual strands, wet glistening pink inner folds, close-up overhead view, realistic skin texture, soft even lighting`,
+      systemPrompt: `You are an expert LoRA training captioner.\nWrite short, natural, consistent captions (15-35 words max).\n\nRules:\n- Focus only on repeatable, useful features\n- Be direct and factual\n- NEVER mention watermarks, logos, tattoos, jewelry, background objects, skin blemishes, or unique identifiers\n- No flowery language`,
       model: 'grok-4-1-fast',
       temperature: 0.7,
       detail: 'high'
@@ -492,9 +492,24 @@ export default function App() {
                       key={mode.id}
                       onClick={() => {
                         setCurrentMode(mode.id);
-                        setSettings(s => ({ 
-                          ...s, 
-                          triggerWord: mode.defaultTrigger 
+                        
+                        // Smart system prompt + trigger update
+                        let newSystemPrompt = settings.systemPrompt;
+                        
+                        if (mode.id === 'bodypart') {
+                          newSystemPrompt = `You are an expert LoRA training captioner for body parts.\nFocus heavily on texture, details, wetness, hair, skin, and hand interaction. Be very specific about anatomy.`;
+                        } else if (mode.id === 'character') {
+                          newSystemPrompt = `You are an expert LoRA training captioner for characters.\nFocus on face, hair, body type, clothing, pose, expression, and overall appearance.`;
+                        } else if (mode.id === 'general') {
+                          newSystemPrompt = `You are an expert LoRA training captioner for full scenes.\nDescribe the main subject, composition, lighting, environment, and mood naturally.`;
+                        } else if (mode.id === 'object') {
+                          newSystemPrompt = `You are an expert LoRA training captioner for objects.\nFocus on shape, material, texture, details, and how it appears in the image.`;
+                        }
+
+                        setSettings(s => ({
+                          ...s,
+                          triggerWord: mode.defaultTrigger,
+                          systemPrompt: newSystemPrompt
                         }));
                       }}
                       className={cn(
