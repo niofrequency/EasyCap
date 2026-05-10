@@ -97,10 +97,10 @@ export default function App() {
     if (saved) return JSON.parse(saved);
     return {
       apiKey: '',
-      triggerWord: 'my_subject',
-      systemPrompt: `You are an expert LoRA training captioner.\nWrite short, natural, consistent captions (15-35 words max).\n\nRules:\n- Focus only on repeatable, useful features\n- Be direct and factual\n- NEVER mention watermarks, logos, tattoos, jewelry, background objects, skin blemishes, or unique identifiers\n- No flowery language`,
+      triggerWord: 'hairy pussy',
+      systemPrompt: `You are an expert LoRA training captioner specialized in hairy pussy.\n\nWrite short, natural, consistent captions (20-35 words maximum).\n\nRules:\n- Always start with "hairy pussy,"\n- Observe the image VERY carefully. Never guess "seated on stool" if the person is bent over.\n- Always describe real pose and camera angle.\n- For rear/doggy views: always say "anus positioned above vagina"\n- For front views: always say "anus positioned below vagina"\n- Describe body type only when obvious (thick thighs, curvy, petite, etc.)\n- Focus on: pubic hair density/curl/color/strands, wetness, hand interaction, clothing pulled aside, labia details\n\nBe extremely accurate about the pose.`,
       model: 'grok-4-1-fast',
-      temperature: 0.7,
+      temperature: 0.75,
       detail: 'high'
     };
   });
@@ -254,54 +254,55 @@ export default function App() {
     }
   }, [images, selectedImageId]);
 
-  // Captioning Logic
+  // === IMPROVED processImage ===
   const processImage = async (imgId: string) => {
     const img = images.find(i => i.id === imgId);
     if (!img) return;
-
+    
     setImages(prev => prev.map(p => p.id === imgId ? { ...p, status: 'processing', error: undefined } : p));
-
+    
     try {
       const reader = new FileReader();
-      const base64Promise = new Promise<{base64: string, type: string}>((resolve) => {
-        reader.onload = () => {
-          const base64 = (reader.result as string).split(',')[1];
-          resolve({ base64, type: img.file.type });
-        };
+      const base64Promise = new Promise<string>((resolve) => {
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
         reader.readAsDataURL(img.file);
       });
-      const { base64: base64Image, type: mimeType } = await base64Promise;
-
+      
+      const base64Image = await base64Promise;
+      
       const response = await fetch('/api/caption', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'x-api-key': settings.apiKey 
+          'x-api-key': settings.apiKey
         },
         body: JSON.stringify({
           image: base64Image,
-          mimeType: mimeType,
-          systemPrompt: settings.systemPrompt,
+          mimeType: img.file.type,
+          systemPrompt: settings.systemPrompt,     // ← This must contain our strong prompt
           model: settings.model,
-          temperature: settings.temperature,
+          temperature: settings.temperature || 0.75, // Lower = more consistent
           detail: settings.detail,
-          triggerWord: settings.triggerWord 
+          triggerWord: settings.triggerWord
         })
       });
-
+      
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to caption');
-
+      if (!response.ok) throw new Error(data.error || 'Caption failed');
+      
       let captionText = data.caption.trim();
-
-      // Remove duplicate trigger if Grok includes it
-      if (captionText.toLowerCase().startsWith(settings.triggerWord.toLowerCase())) {
-        captionText = captionText.replace(new RegExp(`^${settings.triggerWord}\\s*,?\\s*`, 'i'), '').trim();
-      }
-
+      
+      // Stronger cleaning
+      captionText = captionText
+        .replace(/^hairy pussy,?\s*/i, '')           // Remove duplicate trigger
+        .replace(/seated on stool|lying on stool/gi, 'bent over')  // Fix common hallucination
+        .trim();
+        
       const fullCaption = `${settings.triggerWord}, ${captionText}`;
+      
       setImages(prev => prev.map(p => p.id === imgId ? { ...p, status: 'done', caption: fullCaption } : p));
     } catch (error: any) {
+      console.error(error);
       setImages(prev => prev.map(p => p.id === imgId ? { ...p, status: 'error', error: error.message } : p));
     }
   };
@@ -497,7 +498,7 @@ export default function App() {
                         let newSystemPrompt = settings.systemPrompt;
                         
                         if (mode.id === 'bodypart') {
-                          newSystemPrompt = `You are an expert LoRA training captioner for body parts.\nFocus heavily on texture, details, wetness, hair, skin, and hand interaction. Be very specific about anatomy.`;
+                          newSystemPrompt = `You are an expert LoRA training captioner specialized in hairy pussy.\n\nWrite short, natural, consistent captions (20-35 words maximum).\n\nRules:\n- Always start with "hairy pussy,"\n- Observe the image VERY carefully. Never guess "seated on stool" if the person is bent over.\n- Always describe real pose and camera angle.\n- For rear/doggy views: always say "anus positioned above vagina"\n- For front views: always say "anus positioned below vagina"\n- Describe body type only when obvious (thick thighs, curvy, petite, etc.)\n- Focus on: pubic hair density/curl/color/strands, wetness, hand interaction, clothing pulled aside, labia details\n\nBe extremely accurate about the pose.`;
                         } else if (mode.id === 'character') {
                           newSystemPrompt = `You are an expert LoRA training captioner for characters.\nFocus on face, hair, body type, clothing, pose, expression, and overall appearance.`;
                         } else if (mode.id === 'general') {
